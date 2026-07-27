@@ -23,8 +23,6 @@ SWP_SHOWWINDOW = 0x0040
 SWP_NOOWNERZORDER = 0x0200
 FLAGS_FORCAR_TOPO = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER
 
-# Bandas de Z-Order do DWM (Desktop Window Manager)
-# Banda 2 = ZBID_UIACCESS (Elevado acima de quase todas as janelas e sobreposições)
 ZBID_UIACCESS = 2
 
 hwnd = None
@@ -34,13 +32,11 @@ def fixar_no_topo_absoluto():
     if hwnd:
         try:
             import ctypes
-            # Tenta injetar na Banda UIAccess do DWM (Requer Windows 8/10/11)
             try:
                 ctypes.windll.user32.SetWindowBand(hwnd, 0, ZBID_UIACCESS)
             except Exception:
                 pass
 
-            # Reforça via SetWindowPos tradicional sem tomar foco
             ctypes.windll.user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, FLAGS_FORCAR_TOPO)
         except Exception:
             pass
@@ -51,7 +47,6 @@ try:
 
     hwnd = pygame.display.get_wm_info()["window"]
 
-    # WS_EX_LAYERED (0x80000) | WS_EX_TRANSPARENT (0x20) | WS_EX_TOPMOST (0x8) | WS_EX_TOOLWINDOW (0x80) | WS_EX_NOACTIVATE (0x08000000)
     style_ex = 0x00080000 | 0x00000020 | 0x00000008 | 0x00000080 | 0x08000000
     ctypes.windll.user32.SetWindowLongW(hwnd, -20, style_ex)
 
@@ -82,6 +77,11 @@ ALTURA_GANSO = 60
 rodando = True
 distancia_percorrida = 0.0
 
+# --- LÓGICA DE PEGADAS ---
+pegadas = []  # Agora armazena até 12 pares de pegadas
+distancia_ultima_pegada = 0.0
+INTERVALO_PEGADA = 35.0
+
 sequencia_emergencia = ""
 
 
@@ -106,8 +106,10 @@ def ao_clicar(x, y, button, pressed):
 
 
 def spawn_ganso():
-    global ganso_x, ganso_y, estado
+    global ganso_x, ganso_y, estado, pegadas, distancia_ultima_pegada
     estado = PROCURANDO
+    pegadas.clear()
+    distancia_ultima_pegada = 0.0
     borda = random.choice(['CIMA', 'BAIXO', 'ESQUERDA', 'DIREITA'])
     if borda == 'CIMA':
         ganso_x, ganso_y = float(random.randint(0, LARGURA_TELA)), -80.0
@@ -137,6 +139,29 @@ listener_teclado = keyboard.Listener(on_press=ao_pressionar_tecla)
 
 listener_mouse.start()
 listener_teclado.start()
+
+
+def adicionar_pegada(x, y, mirando_esquerda):
+    global pegadas
+    pata1 = (x + 18, y + 55)
+    pata2 = (x + 30, y + 55)
+    pegadas.append({'pata1': pata1, 'pata2': pata2, 'mirando_esquerda': mirando_esquerda})
+
+    # MUDANÇA AQUI: limite alterado de 6 para 12
+    if len(pegadas) > 12:
+        pegadas.pop(0)
+
+
+def desenhar_pegadas(surface):
+    cor_pegada_escura = (180, 50, 0)  # Laranja escuro
+    for p in pegadas:
+        p1_x, p1_y = p['pata1']
+        p2_x, p2_y = p['pata2']
+        esq = p['mirando_esquerda']
+
+        # Tamanho original normal (6px comprimento x 3px espessura)
+        pygame.draw.line(surface, cor_pegada_escura, (p1_x, p1_y), (p1_x - 6 if esq else p1_x + 6, p1_y), 3)
+        pygame.draw.line(surface, cor_pegada_escura, (p2_x, p2_y), (p2_x - 6 if esq else p2_x + 6, p2_y), 3)
 
 
 def desenhar_ganso(surface, x, y, mirando_esquerda, dist_passo):
@@ -192,6 +217,8 @@ while rodando:
 
     cx, cy = pyautogui.position()
 
+    olhando_esquerda = (cx < ganso_x) if estado == PROCURANDO else (alvo_fuga_x < ganso_x)
+
     if estado == PROCURANDO:
         dx = cx - (ganso_x + LARGURA_GANSO / 2)
         dy = cy - (ganso_y + ALTURA_GANSO / 2)
@@ -202,10 +229,17 @@ while rodando:
             definir_destino_fuga()
         else:
             pas_x = (dx / distancia) * VELOCIDADE_CACA
-            pas_y = (dy / distancia) * VELOCIDADE_CACA
+            pas_y = (dy / distancia) * VELOCIDADE_FUGA
             ganso_x += pas_x
             ganso_y += pas_y
-            distancia_percorrida += math.hypot(pas_x, pas_y)
+
+            passo = math.hypot(pas_x, pas_y)
+            distancia_percorrida += passo
+            distancia_ultima_pegada += passo
+
+            if distancia_ultima_pegada >= INTERVALO_PEGADA:
+                adicionar_pegada(ganso_x, ganso_y, olhando_esquerda)
+                distancia_ultima_pegada = 0.0
 
     elif estado == CAPTURADO:
         bico_x = int(ganso_x + (5 if ganso_x > alvo_fuga_x else 38))
@@ -227,11 +261,18 @@ while rodando:
             pas_y = (dy / distancia) * VELOCIDADE_FUGA
             ganso_x += pas_x
             ganso_y += pas_y
-            distancia_percorrida += math.hypot(pas_x, pas_y)
+
+            passo = math.hypot(pas_x, pas_y)
+            distancia_percorrida += passo
+            distancia_ultima_pegada += passo
+
+            if distancia_ultima_pegada >= INTERVALO_PEGADA:
+                adicionar_pegada(ganso_x, ganso_y, olhando_esquerda)
+                distancia_ultima_pegada = 0.0
 
     screen.fill((0, 0, 0))
 
-    olhando_esquerda = (cx < ganso_x) if estado == PROCURANDO else (alvo_fuga_x < ganso_x)
+    desenhar_pegadas(screen)
     desenhar_ganso(screen, ganso_x, ganso_y, olhando_esquerda, distancia_percorrida)
 
     pygame.display.flip()
